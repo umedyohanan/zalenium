@@ -19,7 +19,7 @@ import com.spotify.docker.client.AnsiProgressHandler;
 import com.spotify.docker.client.DefaultDockerClient;
 import com.spotify.docker.client.DockerClient;
 import com.spotify.docker.client.LogStream;
-import com.spotify.docker.client.messages.PortBinding;
+import com.spotify.docker.client.messages.*;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.slf4j.Logger;
@@ -353,6 +353,18 @@ public class DockerContainerClient implements ContainerClient {
 
         HostConfig hostConfig = hostConfigBuilder.build();
 
+        String ipAddress = envVars.get("SELENIUM_NODE_HOST");
+        EndpointConfig.EndpointIpamConfig.Builder endpointIpamConfigBuilder = EndpointConfig.EndpointIpamConfig.builder()
+                .ipv4Address(ipAddress);
+        final EndpointConfig.EndpointIpamConfig endpointIpamConfig = endpointIpamConfigBuilder.build();
+        EndpointConfig.Builder endpointConfigBuilder = EndpointConfig.builder()
+                .ipamConfig(endpointIpamConfig);
+        final EndpointConfig endpointConfig = endpointConfigBuilder.build();
+
+        Map<String, EndpointConfig> endpointConfigMap = new HashMap<>();
+        endpointConfigMap.put(networkMode, endpointConfig);
+
+        final ContainerConfig.NetworkingConfig networkingConfig = ContainerConfig.NetworkingConfig.create(endpointConfigMap);
 
         List<String> flattenedEnvVars = envVars.entrySet().stream()
                 .map(e -> e.getKey() + "=" + e.getValue())
@@ -363,7 +375,8 @@ public class DockerContainerClient implements ContainerClient {
                 .image(image)
                 .env(flattenedEnvVars)
                 .exposedPorts(exposedPorts)
-                .hostConfig(hostConfig);
+                .hostConfig(hostConfig)
+                .networkingConfig(networkingConfig);
 
         if (seleniumContainerLabels.size() > 0) {
             builder.labels(seleniumContainerLabels);
@@ -621,7 +634,10 @@ public class DockerContainerClient implements ContainerClient {
             ContainerInfo containerInfo = dockerClient.inspectContainer(containerId);
             if (containerInfo.networkSettings().ipAddress().trim().isEmpty()) {
                 ImmutableMap<String, AttachedNetwork> networks = containerInfo.networkSettings().networks();
-                return networks.entrySet().stream().findFirst().get().getValue().ipAddress();
+
+                String ipAddress = networks.entrySet().stream().findFirst().get().getValue().ipAddress();
+
+                return ipAddress;
             }
             return containerInfo.networkSettings().ipAddress();
         } catch (DockerException | InterruptedException e) {
@@ -641,12 +657,16 @@ public class DockerContainerClient implements ContainerClient {
             try {
                 URL statusUrl = new URL(String.format("http://%s:%s/wd/hub/status", containerIp, container.getNodePort()));
                 String status = IOUtils.toString(statusUrl, StandardCharsets.UTF_8);
+                logger.info(statusUrl.toString());
+                logger.info(status);
                 String successMessage = "\"Node is running\"";
                 if (status.contains(successMessage)) {
                     return true;
                 }
             } catch (IOException e) {
+                logger.debug("container IP is - {}", containerIp);
                 logger.debug("Error while getting node status, probably the node is still starting up...", e);
+
             }
         }
         return false;

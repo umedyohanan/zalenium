@@ -1,17 +1,13 @@
 package de.zalando.ep.zalenium.proxy;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.TimeZone;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.util.*;
 
 import de.zalando.ep.zalenium.container.DockerContainerClient;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.RandomUtils;
+import org.apache.commons.net.util.SubnetUtils;
 import org.openqa.grid.common.RegistrationRequest;
 import org.openqa.selenium.Dimension;
 import org.openqa.selenium.MutableCapabilities;
@@ -261,34 +257,46 @@ public class DockeredSeleniumStarter {
 
         TimeZone effectiveTimeZone = ObjectUtils.defaultIfNull(timeZone, DEFAULT_TZ);
         Dimension effectiveScreenSize = ObjectUtils.defaultIfNull(screenSize, DEFAULT_SCREEN_SIZE);
+        InetAddress ip;
+        try {
+            ip = InetAddress.getLocalHost();
+            System.out.println("Current IP address : " + ip.getHostAddress());
+            String hostIpAddress = ip.getHostAddress();
+            SubnetUtils utils = new SubnetUtils(hostIpAddress + "/24");
+            String[] allIps = utils.getInfo().getAllAddresses();
+            int rnd = new Random().nextInt(allIps.length);
+            String containerIp = allIps[rnd];
+            //NetworkUtils networkUtils = new NetworkUtils();
+            //String hostIpAddress = networkUtils.getIp4NonLoopbackAddressOfThisMachine().getHostAddress();
+            String nodePolling = String.valueOf(RandomUtils.nextInt(90, 120) * 1000);
+            String nodeRegisterCycle = String.valueOf(RandomUtils.nextInt(60, 90) * 1000);
+            String seleniumNodeParams = getSeleniumNodeParameters();
+            String latestImage = getLatestDownloadedImage(getDockerSeleniumImageName());
 
-        NetworkUtils networkUtils = new NetworkUtils();
-        String hostIpAddress = networkUtils.getIp4NonLoopbackAddressOfThisMachine().getHostAddress();
-        String nodePolling = String.valueOf(RandomUtils.nextInt(90, 120) * 1000);
-        String nodeRegisterCycle = String.valueOf(RandomUtils.nextInt(60, 90) * 1000);
-        String seleniumNodeParams = getSeleniumNodeParameters();
-        String latestImage = getLatestDownloadedImage(getDockerSeleniumImageName());
+            int containerPort = LOWER_PORT_BOUNDARY;
+            if (containerClient instanceof DockerContainerClient) {
+                containerPort = findFreePortInRange();
+            }
+            Map<String, String> envVars = buildEnvVars(effectiveTimeZone, effectiveScreenSize, hostIpAddress, sendAnonymousUsageInfo,
+                nodePolling, nodeRegisterCycle, seleniumNodeParams, containerPort, containerIp);
 
-        int containerPort = LOWER_PORT_BOUNDARY;
-        if (containerClient instanceof DockerContainerClient) {
-            containerPort = findFreePortInRange();
+            return containerClient.createContainer(getContainerName(), latestImage, envVars, String.valueOf(containerPort));
+        } catch (UnknownHostException e) {
+            e.printStackTrace();
         }
-        Map<String, String> envVars = buildEnvVars(effectiveTimeZone, effectiveScreenSize, hostIpAddress, sendAnonymousUsageInfo,
-            nodePolling, nodeRegisterCycle, seleniumNodeParams, containerPort);
-
-        return containerClient.createContainer(getContainerName(), latestImage, envVars, String.valueOf(containerPort));
+        return null;
     }
 
     private Map<String, String> buildEnvVars(TimeZone timeZone, Dimension screenSize, String hostIpAddress,
             boolean sendAnonymousUsageInfo, String nodePolling, String nodeRegisterCycle,
-            String seleniumNodeParams, int containerPort) {
+            String seleniumNodeParams, int containerPort, String seleniumNodeHost) {
         final int noVncPort = containerPort + NO_VNC_PORT_GAP;
         final int vncPort = containerPort + VNC_PORT_GAP;
         Map<String, String> envVars = new HashMap<>();
         envVars.put("ZALENIUM", "true");
         envVars.put("SELENIUM_HUB_HOST", hostIpAddress);
         envVars.put("SELENIUM_HUB_PORT", "4445");
-        envVars.put("SELENIUM_NODE_HOST", "0.0.0.0");
+        envVars.put("SELENIUM_NODE_HOST", seleniumNodeHost);
         envVars.put("GRID", "false");
         envVars.put("WAIT_TIMEOUT", "120s");
         envVars.put("PICK_ALL_RANDOM_PORTS", "false");

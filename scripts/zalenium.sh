@@ -15,7 +15,7 @@ SCREEN_HEIGHT=${SCREEN_HEIGHT:-1080}
 TZ=${TZ:-"Europe/Berlin"}
 SEND_ANONYMOUS_USAGE_INFO=${SEND_ANONYMOUS_USAGE_INFO:-true}
 START_TUNNEL=${START_TUNNEL:-false}
-DEBUG_ENABLED=${DEBUG_ENABLED:-false}
+DEBUG_ENABLED=${DEBUG_ENABLED:-true}
 KEEP_ONLY_FAILED_TESTS=${KEEP_ONLY_FAILED_TESTS:-false}
 RETENTION_PERIOD=${RETENTION_PERIOD:-3}
 LOG_JSON=${LOG_JSON:-false}
@@ -32,6 +32,7 @@ CHECK_CONTAINERS_INTERVAL=${CHECK_CONTAINERS_INTERVAL:-5000}
 ZALENIUM_PROXY_CLEANUP_TIMEOUT=${ZALENIUM_PROXY_CLEANUP_TIMEOUT:-180}
 # browserTimeout parameter, used in hub and nodes.
 SEL_BROWSER_TIMEOUT_SECS=${SEL_BROWSER_TIMEOUT_SECS:-16000}
+ZALENIUM_EXTRA_JVM_PARAMS="-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005"
 
 HOST_UID=${HOST_UID:-1000}
 HOST_GID=${HOST_GID:-1000}
@@ -409,6 +410,12 @@ StartUp()
     # In nginx.conf, Replace {{contextPath}} with value of APPEND_CONTEXT_PATH
     sed -i.bak "s~{{contextPath}}~${CONTEXT_PATH}~" /home/seluser/nginx.conf
 
+    HOST_IP_ADDRESS=$(ifconfig eth0 | grep -Eo 'inet (addr:)?([0-9]*\.){3}[0-9]*' | grep -Eo '([0-9]*\.){3}[0-9]*' | grep -v '127.0.0.1')
+    ip route change default via ${HOST_IP_ADDRESS} dev eth0
+
+    sed -i "s/proxy_pass http:\/\/127.0.0.1:4445;/proxy_pass http:\/\/$HOST_IP_ADDRESS:4445;/g" /home/seluser/nginx.conf
+    sed -n '/location  \/ {/,/location \/dashboard {/p' /home/seluser/nginx.conf
+
     echo "Starting Nginx reverse proxy..."
     nginx -c /home/seluser/nginx.conf
 
@@ -433,7 +440,9 @@ StartUp()
     -Dlogback.configurationFile=${LOGBACK_PATH} \
     -Djava.util.logging.config.file=logging_${DEBUG_MODE}.properties \
     -cp ${ZALENIUM_ARTIFACT} org.openqa.grid.selenium.GridLauncherV3 \
-    -role hub -port 4445 -newSessionWaitTimeout ${NEW_SESSION_WAIT_TIMEOUT} \
+    -role hub \
+    -host ${HOST_IP_ADDRESS} \
+    -port 4445 -newSessionWaitTimeout ${NEW_SESSION_WAIT_TIMEOUT} \
     -browserTimeout ${SEL_BROWSER_TIMEOUT_SECS} \
     -registry de.zalando.ep.zalenium.registry.ZaleniumRegistry \
     ${SELENIUM_HUB_PARAMS} \
