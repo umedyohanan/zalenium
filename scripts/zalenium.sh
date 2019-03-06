@@ -15,7 +15,7 @@ SCREEN_HEIGHT=${SCREEN_HEIGHT:-1080}
 TZ=${TZ:-"Europe/Berlin"}
 SEND_ANONYMOUS_USAGE_INFO=${SEND_ANONYMOUS_USAGE_INFO:-true}
 START_TUNNEL=${START_TUNNEL:-false}
-DEBUG_ENABLED=${DEBUG_ENABLED:-true}
+DEBUG_ENABLED=${DEBUG_ENABLED:-false}
 KEEP_ONLY_FAILED_TESTS=${KEEP_ONLY_FAILED_TESTS:-false}
 RETENTION_PERIOD=${RETENTION_PERIOD:-3}
 LOG_JSON=${LOG_JSON:-false}
@@ -32,13 +32,15 @@ CHECK_CONTAINERS_INTERVAL=${CHECK_CONTAINERS_INTERVAL:-5000}
 ZALENIUM_PROXY_CLEANUP_TIMEOUT=${ZALENIUM_PROXY_CLEANUP_TIMEOUT:-180}
 # browserTimeout parameter, used in hub and nodes.
 SEL_BROWSER_TIMEOUT_SECS=${SEL_BROWSER_TIMEOUT_SECS:-16000}
-ZALENIUM_EXTRA_JVM_PARAMS="-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005"
+#ZALENIUM_EXTRA_JVM_PARAMS="-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=5005"
 
 HOST_UID=${HOST_UID:-1000}
 HOST_GID=${HOST_GID:-1000}
 GA_TRACKING_ID="UA-88441352-3"
 GA_ENDPOINT=https://www.google-analytics.com/collect
 GA_API_VERSION="1"
+
+SWARM_ENABLED=false
 
 KUBERNETES_ENABLED=false
 if [ -f /var/run/secrets/kubernetes.io/serviceaccount/token ]; then
@@ -281,6 +283,16 @@ StartUp()
         fi
     fi
 
+    LABELS=$(docker -H ${DOCKER_HOST} inspect ${CONTAINER_ID} | jq -r '.[0].Config.Labels | keys[] | contains("swarm")')
+
+    for i in ${LABELS[@]}; do
+        if [[ ${i} == true ]]; then
+            echo "SWARM ENABLED";
+            SWARM_ENABLED=true
+            break;
+        fi;
+    done;
+
     if [ ! -f ${ZALENIUM_ARTIFACT} ];
     then
         echo "Zalenium JAR not present, exiting start script."
@@ -357,6 +369,7 @@ StartUp()
     export ZALENIUM_KEEP_ONLY_FAILED_TESTS=${KEEP_ONLY_FAILED_TESTS}
     export ZALENIUM_RETENTION_PERIOD=${RETENTION_PERIOD}
     export ZALENIUM_NODE_PARAMS=${SELENIUM_NODE_PARAMS}
+    export SWARM_ENABLED=${SWARM_ENABLED}
 
     # Random ID used for Google Analytics
     # If it is running inside the Zalando Jenkins env, we pick the team name from the $BUILD_URL
@@ -393,10 +406,13 @@ StartUp()
     fi
 
     echo "Copying files for Dashboard..."
+    mkdir /home/seluser/videos
     cp /home/seluser/dashboard_template.html /home/seluser/videos/dashboard.html
     cp -r /home/seluser/css /home/seluser/videos
     cp -r /home/seluser/js /home/seluser/videos
     cp -r /home/seluser/img /home/seluser/videos
+    cp /home/seluser/index.html /home/seluser/videos/index.html
+    ls -la /home/seluser/videos
 
     if [ "${WE_HAVE_SUDO_ACCESS}" == "true" ]; then
         sudo chown -R ${HOST_UID}:${HOST_GID} /home/seluser
@@ -410,11 +426,16 @@ StartUp()
     # In nginx.conf, Replace {{contextPath}} with value of APPEND_CONTEXT_PATH
     sed -i.bak "s~{{contextPath}}~${CONTEXT_PATH}~" /home/seluser/nginx.conf
 
-    HOST_IP_ADDRESS=$(ifconfig eth0 | grep -Eo 'inet (addr:)?([0-9]*\.){3}[0-9]*' | grep -Eo '([0-9]*\.){3}[0-9]*' | grep -v '127.0.0.1')
-    ip route change default via ${HOST_IP_ADDRESS} dev eth0
-
-    sed -i "s/proxy_pass http:\/\/127.0.0.1:4445;/proxy_pass http:\/\/$HOST_IP_ADDRESS:4445;/g" /home/seluser/nginx.conf
-    sed -n '/location  \/ {/,/location \/dashboard {/p' /home/seluser/nginx.conf
+    HOST_IP_ADDRESS="0.0.0.0"
+    if [ "$SWARM_ENABLED" == true ]; then
+        HOST_IP_ADDRESS=$(docker -H ${DOCKER_HOST} inspect ${CONTAINER_ID} | jq -r '.[0].NetworkSettings.Networks | del(.ingress) | del(.docker_gwbridge) | .[].IPAddress')
+        export HOST_IP_ADDRESS=${HOST_IP_ADDRESS}
+        sed -i "s/proxy_pass http:\/\/127.0.0.1:4445/proxy_pass http:\/\/$HOST_IP_ADDRESS:4445/g" /home/seluser/nginx.conf
+        sed -n '/location  \/ {/,/location \/dashboard {/p' /home/seluser/nginx.conf
+    fi
+#    HOST_IP_ADDRESS=$(docker -H ${DOCKER_HOST} inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ${CONTAINER_ID})
+#    HOST_IP_ADDRESS=$(ifconfig eth0 | grep -Eo 'inet (addr:)?([0-9]*\.){3}[0-9]*' | grep -Eo '([0-9]*\.){3}[0-9]*' | grep -v '127.0.0.1')
+#    ip route change default via ${HOST_IP_ADDRESS} dev eth0
 
     echo "Starting Nginx reverse proxy..."
     nginx -c /home/seluser/nginx.conf

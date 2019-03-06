@@ -48,6 +48,7 @@ import de.zalando.ep.zalenium.util.GoogleAnalyticsApi;
 import static com.spotify.docker.client.DockerClient.ListContainersParam.withStatusCreated;
 import static com.spotify.docker.client.DockerClient.ListContainersParam.withStatusRunning;
 import static de.zalando.ep.zalenium.util.ZaleniumConfiguration.ZALENIUM_RUNNING_LOCALLY;
+import static de.zalando.ep.zalenium.util.ZaleniumConfiguration.swarmEnabled;
 
 @SuppressWarnings("ConstantConditions")
 public class DockerContainerClient implements ContainerClient {
@@ -352,20 +353,6 @@ public class DockerContainerClient implements ContainerClient {
         }
 
         HostConfig hostConfig = hostConfigBuilder.build();
-
-        String ipAddress = envVars.get("SELENIUM_NODE_HOST");
-        EndpointConfig.EndpointIpamConfig.Builder endpointIpamConfigBuilder = EndpointConfig.EndpointIpamConfig.builder()
-                .ipv4Address(ipAddress);
-        final EndpointConfig.EndpointIpamConfig endpointIpamConfig = endpointIpamConfigBuilder.build();
-        EndpointConfig.Builder endpointConfigBuilder = EndpointConfig.builder()
-                .ipamConfig(endpointIpamConfig);
-        final EndpointConfig endpointConfig = endpointConfigBuilder.build();
-
-        Map<String, EndpointConfig> endpointConfigMap = new HashMap<>();
-        endpointConfigMap.put(networkMode, endpointConfig);
-
-        final ContainerConfig.NetworkingConfig networkingConfig = ContainerConfig.NetworkingConfig.create(endpointConfigMap);
-
         List<String> flattenedEnvVars = envVars.entrySet().stream()
                 .map(e -> e.getKey() + "=" + e.getValue())
                 .collect(Collectors.toList());
@@ -375,8 +362,23 @@ public class DockerContainerClient implements ContainerClient {
                 .image(image)
                 .env(flattenedEnvVars)
                 .exposedPorts(exposedPorts)
-                .hostConfig(hostConfig)
-                .networkingConfig(networkingConfig);
+                .hostConfig(hostConfig);
+
+        if(swarmEnabled) {
+            String ipAddress = envVars.get("SELENIUM_NODE_HOST");
+            EndpointConfig.EndpointIpamConfig.Builder endpointIpamConfigBuilder = EndpointConfig.EndpointIpamConfig.builder()
+                    .ipv4Address(ipAddress);
+            final EndpointConfig.EndpointIpamConfig endpointIpamConfig = endpointIpamConfigBuilder.build();
+            EndpointConfig.Builder endpointConfigBuilder = EndpointConfig.builder()
+                    .ipamConfig(endpointIpamConfig);
+            final EndpointConfig endpointConfig = endpointConfigBuilder.build();
+
+            Map<String, EndpointConfig> endpointConfigMap = new HashMap<>();
+            endpointConfigMap.put(networkMode, endpointConfig);
+
+            final ContainerConfig.NetworkingConfig networkingConfig = ContainerConfig.NetworkingConfig.create(endpointConfigMap);
+            builder.networkingConfig(networkingConfig);
+        }
 
         if (seleniumContainerLabels.size() > 0) {
             builder.labels(seleniumContainerLabels);
@@ -611,7 +613,9 @@ public class DockerContainerClient implements ContainerClient {
             ContainerInfo containerInfo = dockerClient.inspectContainer(zaleniumContainerId);
             ImmutableMap<String, AttachedNetwork> networks = containerInfo.networkSettings().networks();
             for (Map.Entry<String, AttachedNetwork> networkEntry : networks.entrySet()) {
-                if (!DEFAULT_DOCKER_NETWORK_NAME.equalsIgnoreCase(networkEntry.getKey())) {
+                if (!DEFAULT_DOCKER_NETWORK_NAME.equalsIgnoreCase(networkEntry.getKey())
+                     && !"docker_gwbridge".equalsIgnoreCase(networkEntry.getKey())
+                     && !"ingress".equalsIgnoreCase(networkEntry.getKey())) {
                     zaleniumNetwork = networkEntry.getKey();
                     return zaleniumNetwork;
                 }
@@ -634,10 +638,7 @@ public class DockerContainerClient implements ContainerClient {
             ContainerInfo containerInfo = dockerClient.inspectContainer(containerId);
             if (containerInfo.networkSettings().ipAddress().trim().isEmpty()) {
                 ImmutableMap<String, AttachedNetwork> networks = containerInfo.networkSettings().networks();
-
-                String ipAddress = networks.entrySet().stream().findFirst().get().getValue().ipAddress();
-
-                return ipAddress;
+                return networks.entrySet().stream().findFirst().get().getValue().ipAddress();
             }
             return containerInfo.networkSettings().ipAddress();
         } catch (DockerException | InterruptedException e) {

@@ -1,10 +1,9 @@
 package de.zalando.ep.zalenium.proxy;
 
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.util.*;
 
 import de.zalando.ep.zalenium.container.DockerContainerClient;
+import de.zalando.ep.zalenium.util.ZaleniumConfiguration;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.commons.net.util.SubnetUtils;
@@ -27,6 +26,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import static de.zalando.ep.zalenium.util.ZaleniumConfiguration.ZALENIUM_RUNNING_LOCALLY;
+import static de.zalando.ep.zalenium.util.ZaleniumConfiguration.swarmEnabled;
 
 @SuppressWarnings("WeakerAccess")
 public class DockeredSeleniumStarter {
@@ -257,34 +257,33 @@ public class DockeredSeleniumStarter {
 
         TimeZone effectiveTimeZone = ObjectUtils.defaultIfNull(timeZone, DEFAULT_TZ);
         Dimension effectiveScreenSize = ObjectUtils.defaultIfNull(screenSize, DEFAULT_SCREEN_SIZE);
-        InetAddress ip;
-        try {
-            ip = InetAddress.getLocalHost();
-            System.out.println("Current IP address : " + ip.getHostAddress());
-            String hostIpAddress = ip.getHostAddress();
-            SubnetUtils utils = new SubnetUtils(hostIpAddress + "/24");
+        String containerIp = "0.0.0.0";
+
+        String hostIpAddress;
+        if (swarmEnabled) {
+            hostIpAddress = ZaleniumConfiguration.getHostIpAddress();
+            SubnetUtils utils = new SubnetUtils( hostIpAddress + "/24");
             String[] allIps = utils.getInfo().getAllAddresses();
             int rnd = new Random().nextInt(allIps.length);
-            String containerIp = allIps[rnd];
-            //NetworkUtils networkUtils = new NetworkUtils();
-            //String hostIpAddress = networkUtils.getIp4NonLoopbackAddressOfThisMachine().getHostAddress();
-            String nodePolling = String.valueOf(RandomUtils.nextInt(90, 120) * 1000);
-            String nodeRegisterCycle = String.valueOf(RandomUtils.nextInt(60, 90) * 1000);
-            String seleniumNodeParams = getSeleniumNodeParameters();
-            String latestImage = getLatestDownloadedImage(getDockerSeleniumImageName());
-
-            int containerPort = LOWER_PORT_BOUNDARY;
-            if (containerClient instanceof DockerContainerClient) {
-                containerPort = findFreePortInRange();
-            }
-            Map<String, String> envVars = buildEnvVars(effectiveTimeZone, effectiveScreenSize, hostIpAddress, sendAnonymousUsageInfo,
-                nodePolling, nodeRegisterCycle, seleniumNodeParams, containerPort, containerIp);
-
-            return containerClient.createContainer(getContainerName(), latestImage, envVars, String.valueOf(containerPort));
-        } catch (UnknownHostException e) {
-            e.printStackTrace();
+            containerIp = allIps[rnd];
         }
-        return null;
+        else {
+            NetworkUtils networkUtils = new NetworkUtils();
+            hostIpAddress = networkUtils.getIp4NonLoopbackAddressOfThisMachine().getHostAddress();
+        }
+        String nodePolling = String.valueOf(RandomUtils.nextInt(90, 120) * 1000);
+        String nodeRegisterCycle = String.valueOf(RandomUtils.nextInt(60, 90) * 1000);
+        String seleniumNodeParams = getSeleniumNodeParameters();
+        String latestImage = getLatestDownloadedImage(getDockerSeleniumImageName());
+
+        int containerPort = LOWER_PORT_BOUNDARY;
+        if (containerClient instanceof DockerContainerClient) {
+            containerPort = findFreePortInRange();
+        }
+        Map<String, String> envVars = buildEnvVars(effectiveTimeZone, effectiveScreenSize, hostIpAddress, sendAnonymousUsageInfo,
+            nodePolling, nodeRegisterCycle, seleniumNodeParams, containerPort, containerIp);
+
+        return containerClient.createContainer(getContainerName(), latestImage, envVars, String.valueOf(containerPort));
     }
 
     private Map<String, String> buildEnvVars(TimeZone timeZone, Dimension screenSize, String hostIpAddress,
@@ -319,7 +318,7 @@ public class DockeredSeleniumStarter {
         envVars.put("FIREFOX", "false");
         envVars.put("SEL_BROWSER_TIMEOUT_SECS", String.valueOf(getBrowserTimeout()));
         if (ZALENIUM_RUNNING_LOCALLY) {
-            envVars.put("SELENIUM_NODE_PARAMS", String.format("-remoteHost http://%s:%s", hostIpAddress, containerPort));
+            envVars.put("SELENIUM_NODE_PARAMS", String.format("-debug", hostIpAddress, containerPort));
         } else {
             envVars.put("SELENIUM_NODE_PARAMS", seleniumNodeParams);
         }

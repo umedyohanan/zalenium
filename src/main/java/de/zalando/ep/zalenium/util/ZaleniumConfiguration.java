@@ -28,12 +28,15 @@ public class ZaleniumConfiguration {
     private static final String TIME_TO_WAIT_TO_START = "TIME_TO_WAIT_TO_START";
     private static final String MAX_TIMES_TO_PROCESS_REQUEST = "MAX_TIMES_TO_PROCESS_REQUEST";
     private static final String CHECK_CONTAINERS_INTERVAL = "CHECK_CONTAINERS_INTERVAL";
+    private static final String SWARM_ENABLED = "SWARM_ENABLED";
+    private static final String HOST_IP_ADDRESS = "HOST_IP_ADDRESS";
 
     // Intended to start Zalenium locally for debugging or development. See ZaleniumRegistryTest#runLocally
     @VisibleForTesting
     private static final String ZALENIUM_RUNNING_LOCALLY_ENV_VAR = "runningLocally";
     private static final Environment defaultEnvironment = new Environment();
     public static boolean ZALENIUM_RUNNING_LOCALLY = false;
+    public static boolean swarmEnabled;
     @VisibleForTesting
     private static Environment env = defaultEnvironment;
     private static int desiredContainersOnStartup;
@@ -45,6 +48,7 @@ public class ZaleniumConfiguration {
     private static String currentUser;
     private static String HOST_UID;
     private static String HOST_GID;
+    private static String hostIpAddress;
 
     static {
     	readConfigurationFromEnvVariables();
@@ -64,6 +68,10 @@ public class ZaleniumConfiguration {
         setMaxDockerSeleniumContainers(maxDSContainers);
 
         ZALENIUM_RUNNING_LOCALLY = Boolean.valueOf(System.getProperty(ZALENIUM_RUNNING_LOCALLY_ENV_VAR));
+        swarmEnabled = Boolean.valueOf(env.getEnvVariable(SWARM_ENABLED));
+        if(swarmEnabled) {
+            setHostIpAddress(env.getEnvVariable(HOST_IP_ADDRESS));
+        }
 
         boolean waitForNodes = env.getBooleanEnvVariable(WAIT_FOR_AVAILABLE_NODES, true);
         setWaitForAvailableNodes(waitForNodes);
@@ -128,6 +136,14 @@ public class ZaleniumConfiguration {
     public static void setTimeToWaitToStart(int timeToWaitToStart) {
       ZaleniumConfiguration.timeToWaitToStart = timeToWaitToStart < 0 ?
                 DEFAULT_TIME_TO_WAIT_TO_START : timeToWaitToStart;
+    }
+
+    public static void setHostIpAddress(String hostIpAddress) {
+        ZaleniumConfiguration.hostIpAddress = hostIpAddress;
+    }
+
+    public static String getHostIpAddress() {
+        return hostIpAddress;
     }
 
     public static int getDesiredContainersOnStartup() {
